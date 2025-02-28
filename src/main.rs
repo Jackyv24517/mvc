@@ -1,3 +1,4 @@
+use bevy::asset::embedded_asset;
 use bevy::pbr::DirectionalLightShadowMap;
 use bevy::prelude::*;
 use bevy::window::WindowTheme;
@@ -20,31 +21,78 @@ mod utils;
 use utils::*;
 
 mod capture;
-use capture::*;
+
+mod camera;
+use camera::*;
+
+mod types;
+use types::*;
+
+// Note:
+// The keyboard command when in the interactive mode
+//
+// C: capture 1 snapshot
+// L: enter or exit live preview mode
+// I: enter or exit interactive mode
+// space: enter or exit live capture mode
+// arrow key: rotate model
+// wasd: move the model
+// mouse wheel: zoom in or out
+// mouse left click and move: rotate the model
 
 fn main() {
-    let mut app = App::new();
+    // init the app setting
+    let app_settings: AppSettings = init_app();
+
+    let mut app: App = App::new();
     // set the resource
     app.insert_resource(DirectionalLightShadowMap { size: 4096 });
     app.insert_resource(AssetPath {
-        path: "".to_string(),
+        model_path: "".to_string(),
+        skybox_path: "".to_string(),
     });
     app.insert_resource(SavePath {
-        path: "".to_string(),
+        base_dir_path: app_settings.image_save_dir,
+        current_dir_path: "".to_string(),
+        file_name_prefix: "".to_string(),
     });
-    app.insert_resource(ActiveWindowId {
-        id: "temp".to_string(),
+    app.insert_resource(SkyboxAttribute {
+        skybox_handler: None,
     });
     app.insert_resource(OperationWindowRelatedEntities {
         window: None,
-        entitiesList: None,
+        entities_list: None,
+    });
+    app.insert_resource(LiveCameraPanNumber {
+        yaw: 1.0,
+        pitch: 1.0,
+        radius: 1.0,
+    });
+    app.insert_resource(OperationSettings {
+        yaw_min_value: app_settings.yaw_min_value,
+        yaw_max_value: app_settings.yaw_max_value,
+        pitch_min_value: app_settings.pitch_min_value,
+        pitch_max_value: app_settings.pitch_max_value,
+        radius_range: app_settings.radius_range,
+        radius_start_position: 2.5,
+        model_rotate_sensitivity: app_settings.model_rotate_sensitivity,
+        model_reposition_sensitivity: app_settings.model_reposition_sensitivity,
+        mouse_sensitivity: app_settings.mouse_sensitivity,
+        zoom_sensitivity: app_settings.zoom_sensitivity,
+    });
+
+    app.insert_resource(LiveCaptureOperationSettings {
+        live_capture_iteration: app_settings.live_capture_iteration,
+        live_capture_iteration_current_counter: 0,
+        live_capture_coordinate_list: vec![(0., 0., 0.)],
     });
     // set the plugins
     app.add_plugins((DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
-            title: "MVC MAIN MENU!".into(),
+            title: "MVC MAIN MENU 💻!".into(),
             name: Some("MVC".into()),
-            resolution: (500., 750.).into(),
+            position: WindowPosition::At(IVec2 { x: 1, y: 1 }),
+            resolution: (500., 800.).into(),
             // Tells Wasm to resize the window according to the available canvas
             fit_canvas_to_parent: true,
             // Tells Wasm not to override default event handling, like F5, Ctrl+R etc.
@@ -62,20 +110,46 @@ fn main() {
         }),
         ..default()
     }),));
+    app.add_plugins(EmbeddedAssetPlugin);
     // set initial state
-    app.insert_state(AppState::OperationEnd);
+    app.insert_state(AppState::MainMenu);
+    app.insert_state(OperationState::None);
     app.add_systems(Startup, menu);
     app.add_systems(
         Update,
         (
-            file_drag_and_drop_system,
-            button_click_system.run_if(in_state(AppState::OperationEnd)),
-            setup_ambient_light,
-            track_active_window,
-            orbit_camera,
+            file_drag_and_drop_system.run_if(in_state(AppState::MainMenu)),
+            button_click_system.run_if(in_state(AppState::MainMenu)),
+            keyboard_interact.run_if(in_state(AppState::OperationMode)),
+            live_capture_camera.run_if(
+                in_state(AppState::OperationMode).and(in_state(OperationState::LiveCapture)),
+            ),
+            reposition_rotate_model.run_if(
+                in_state(AppState::OperationMode).and(in_state(OperationState::Interactive)),
+            ),
+            interactive_orbit_camera.run_if(
+                in_state(AppState::OperationMode).and(in_state(OperationState::Interactive)),
+            ),
+            live_orbit_camera.run_if(
+                in_state(AppState::OperationMode).and(in_state(OperationState::LivePreview)),
+            ),
+            setup_ambient_light.run_if(in_state(AppState::OperationMode)),
             switch_state_on_window_event,
         ),
     );
 
     app.run();
+}
+
+struct EmbeddedAssetPlugin;
+
+impl Plugin for EmbeddedAssetPlugin {
+    fn build(&self, app: &mut App) {
+        let omit_prefix = "";
+        // Path to asset must be relative to the file, because that's how
+        // include_bytes! works.
+        embedded_asset!(app, omit_prefix, "assets/fonts/FiraSans-Bold.ttf");
+        embedded_asset!(app, omit_prefix, "assets/pisa_diffuse_rgb9e5_zstd.ktx2");
+        embedded_asset!(app, omit_prefix, "assets/pisa_specular_rgb9e5_zstd.ktx2");
+    }
 }
